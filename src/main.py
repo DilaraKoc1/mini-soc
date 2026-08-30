@@ -15,7 +15,7 @@ def pipeline():
                   reverse=True)
 
 def target_account(finding):
-    """What the attack was aimed at: one account, or many for spraying."""
+    """What the attack was aimed at: one account, or how many were swept."""
     return finding["target_user"] or f"{finding['distinct_accounts']} accounts"
 
 def main():

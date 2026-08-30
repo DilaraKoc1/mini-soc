@@ -12,14 +12,17 @@ from datetime import datetime, timedelta
 # Windows event ID for a failed logon.
 FAILED_LOGON = 4625
 
+# The failure code that says the account name itself was not found.
+NO_SUCH_USER = "0xC0000064"
+
 # Rule 1: many attempts against one account.
 BURST_WINDOW = timedelta(minutes=5)
 BURST_THRESHOLD = 5
 
 # Rule 2: one source touching many accounts. Fewer attempts per account by
 # nature, so the threshold counts distinct accounts, not attempts.
-SPRAY_WINDOW = timedelta(minutes=10)
-SPRAY_THRESHOLD = 4
+SWEEP_WINDOW = timedelta(minutes=10)
+SWEEP_THRESHOLD = 4
 
 RULES = {
     "brute_force": {
@@ -28,11 +31,17 @@ RULES = {
         "mitre_technique": "Brute Force",
         "mitre_tactic": "Credential Access",
     },
-    "spraying": {
-        "title": "Failed logons across many accounts from one source",
+    "enumeration": {
+        "title": "Failed logons against account names that do not exist",
         "mitre_id": "T1087",
         "mitre_technique": "Account Discovery",
         "mitre_tactic": "Discovery",
+    },
+    "spraying": {
+        "title": "One password tried against many existing accounts",
+        "mitre_id": "T1110.003",
+        "mitre_technique": "Password Spraying",
+        "mitre_tactic": "Credential Access",
     },
 }
 
@@ -105,7 +114,7 @@ def build(cluster, rule, source_ip, target_user):
         "mitre_technique": RULES[rule]["mitre_technique"],
         "mitre_tactic": RULES[rule]["mitre_tactic"],
         "source_ip": source_ip,
-        "target_user": target_user,          # None for spraying because it has many
+        "target_user": target_user,      # None for a sweep because it has many
         "target_users": dict(target_users),
         "attempts": len(cluster),
         "distinct_accounts": len(target_users),
@@ -140,19 +149,32 @@ def detect_brute_force(events):
     return findings
 
 
-def detect_spraying(events):
-    """Rule 2: one source failing against SPRAY_THRESHOLD+ distinct accounts
-    inside SPRAY_WINDOW."""
+def sweep_technique(cluster):
+    """Which technique a sweep is, decided by the failure codes.
+
+    A spray works from a list of accounts the attacker believes are real, so
+    it cannot produce a "no such user" failure. One is enough: if names were
+    guessed it is enumeration, otherwise spraying.
+    """
+    names_were_guessed = any(event["status_code"] == NO_SUCH_USER
+                             for event in cluster)
+    return "enumeration" if names_were_guessed else "spraying"
+
+
+def detect_account_sweep(events):
+    """Rule 2: one source failing against SWEEP_THRESHOLD+ distinct accounts
+    inside SWEEP_WINDOW. The failure codes decide which technique it was."""
     groups = {}
-    for e in failures(events):
-        groups.setdefault(e["source_ip"], []).append(e)
+    for event in failures(events):
+        groups.setdefault(event["source_ip"], []).append(event)
 
     findings = []
     for source_ip, group in groups.items():
-        start, end, accounts = widest_spread(group, SPRAY_WINDOW)
-        if accounts >= SPRAY_THRESHOLD:
+        start, end, accounts = widest_spread(group, SWEEP_WINDOW)
+        if accounts >= SWEEP_THRESHOLD:
             spread = group[start:end]
-            findings.append(build(spread, "spraying", source_ip, None))
+            technique = sweep_technique(spread)
+            findings.append(build(spread, technique, source_ip, None))
     return findings
 
 
@@ -162,4 +184,4 @@ def run(events):
     An event can appear in two findings: the same burst is evidence of two
     different techniques, and they carry different MITRE IDs and different responses.
     """
-    return detect_brute_force(events) + detect_spraying(events)
+    return detect_brute_force(events) + detect_account_sweep(events)
