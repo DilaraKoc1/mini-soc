@@ -1,9 +1,10 @@
-"""Run the pipeline: collect -> detect -> enrich -> assess, and print the outcome."""
+"""Run the pipeline: collect -> detect -> enrich -> assess -> dashboard."""
 
 import textwrap
 
 import agent
 import collect
+import dashboard
 import detect
 import enrich
 
@@ -28,7 +29,6 @@ def main():
     findings = pipeline()
     if not findings:
         print("No findings found.")
-        return
     for finding in findings:
         # flush: stdout is block-buffered off a terminal, so without it this
         # line would sit in the buffer through the model call below.
@@ -42,6 +42,8 @@ def main():
         print()
         print(textwrap.indent(agent.assess(finding), "     "))
         print()
+
+    print(f"Dashboard: {dashboard.write(findings)}")
 
 
 if __name__ == "__main__":
