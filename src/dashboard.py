@@ -6,6 +6,7 @@ an attacker chose, and the browser would otherwise run them as markup.
 
 import html
 from collections import Counter
+from datetime import datetime, timedelta
 from pathlib import Path
 
 DASHBOARD_FILE = (Path(__file__).resolve().parent.parent
@@ -15,6 +16,10 @@ DASHBOARD_FILE = (Path(__file__).resolve().parent.parent
 # it rather than importing from collect: a renderer that reaches into the
 # detection module for one integer is coupled to it for no gain.
 FAILED_LOGON = 4625
+
+# How many accounts the card lists. One place, because the card's title says
+# how many of the total it is showing and the two must not drift apart.
+ACCOUNT_LIMIT = 5
 
 # The pipeline scores 1 to 5. SOC consoles name their levels instead, and a
 # reader who has seen one expects those words rather than a bare number.
@@ -216,15 +221,23 @@ def failures_per_hour(events):
     Dropping the quiet hours would pull the bars together and hide the thing
     the chart exists to show, which is that the failures arrive in bursts.
     """
-    hours = [e["timestamp"][:13] for e in events
-             if e["event_id"] == FAILED_LOGON]
-    if not hours:
+    stamps = [datetime.fromisoformat(e["timestamp"]).replace(
+                  minute=0, second=0, microsecond=0)
+              for e in events if e["event_id"] == FAILED_LOGON]
+    if not stamps:
         return []
-    counts = Counter(hours)
-    first, last = min(counts), max(counts)
-    start, end = int(first[11:13]), int(last[11:13])
-    return [(f"{hour:02d}:00", counts.get(f"{first[:11]}{hour:02d}", 0))
-            for hour in range(start, end + 1)]
+
+    # Stepping over real datetimes rather than a range of hour numbers.
+    # Counting from a sliced timestamp worked until the events crossed
+    # midnight, where the first hour is 23 and the last is 01 and the range
+    # between them is empty: the chart went blank without saying so.
+    counts = Counter(stamps)
+    hour, last = min(stamps), max(stamps)
+    buckets = []
+    while hour <= last:
+        buckets.append((hour.strftime("%H:%M"), counts.get(hour, 0)))
+        hour += timedelta(hours=1)
+    return buckets
 
 
 def timeline(events):
@@ -290,7 +303,17 @@ def tactics(findings):
     return "".join(rows) or "none"
 
 
-def top_accounts(events, limit=5):
+def account_total(events):
+    """How many distinct accounts were targeted at all.
+
+    The card shows a handful. A truncated list that does not say it is
+    truncated reads as the whole picture.
+    """
+    return len({event["target_user"] for event in events
+                if event["event_id"] == FAILED_LOGON})
+
+
+def top_accounts(events, limit=ACCOUNT_LIMIT):
     """The most-targeted accounts, counted from the events.
 
     Counted from the events rather than summed across the findings. Findings
@@ -381,9 +404,12 @@ def render(findings, events=()):
         window = f"Data window {when(first)} to {when(last)}"
         listing = (f'<div class="list">{column_headings()}'
                    f'{"".join(entry(f) for f in findings)}</div>')
+        total = account_total(events)
+        shown = min(ACCOUNT_LIMIT, total)
+        accounts = f"Top targeted accounts ({shown} of {total})"
         cards = (f'<div class="cards">'
                  f'{panel("MITRE ATT&CK", tactics(findings))}'
-                 f'{panel("Top targeted accounts", top_accounts(events))}'
+                 f"{panel(accounts, top_accounts(events))}"
                  f"</div>")
     else:
         window = "No findings"
