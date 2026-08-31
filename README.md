@@ -1,11 +1,29 @@
 # Mini SOC
 
-Turns raw Windows authentication events into scored, MITRE-mapped findings,
-has a local language model triage each one, and renders the result as an HTML
-dashboard.
+Finds password attacks in Windows security logs, rates how serious each one is,
+and has a language model running on your own machine explain what to do next.
 
-Pure Python standard library. No packages to install, no API key, and nothing
-leaves the machine.
+![Mini SOC dashboard](docs/dashboard.png)
+
+---
+
+## What it does
+
+Windows writes a line to its security log every time a sign-in fails. One line
+means nothing, because people mistype passwords. Seventeen of them against the
+same account inside seventy-six seconds is a program, not a person. Nothing in
+the log says "attack": the attack only exists once something counts the lines
+and notices the shape they make.
+
+This mini SOC does that counting. It groups the failures that belong together,
+works out which attack technique each group is, scores how serious it looks and
+says why, and then asks a language model for the part a rule cannot do: what this
+most likely is, how sure it is, what the data cannot answer, and which steps to
+take first. The result is the dashboard above.
+
+Nothing leaves the machine. There is no account to create, no key to configure
+and no package to install: it is Python and its standard library, plus a model
+running locally.
 
 ```
 collect  ->  detect  ->  enrich  ->  agent  ->  dashboard
@@ -93,8 +111,6 @@ adversarial:
 `data/` is generated and not tracked. A fresh clone recreates it on first run.
 
 ## The dashboard
-
-![Mini SOC dashboard](docs/dashboard.png)
 
 `data/dashboard.html` is a single file with the stylesheet inlined, so it opens
 from disk with no server. Four cards sit above the findings: counts per
