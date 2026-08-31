@@ -1,10 +1,20 @@
-"""Dashboard: render the findings as a standalone HTML page."""
+"""Dashboard: render the findings as a standalone HTML page.
+
+Everything from the logs is escaped on the way in: account names are strings
+an attacker chose, and the browser would otherwise run them as markup.
+"""
 
 import html
+from collections import Counter
 from pathlib import Path
 
 DASHBOARD_FILE = (Path(__file__).resolve().parent.parent
                   / "data" / "dashboard.html")
+
+# Defined here rather than imported from detect, the same way detect defines
+# it rather than importing from collect: a renderer that reaches into the
+# detection module for one integer is coupled to it for no gain.
+FAILED_LOGON = 4625
 
 # The pipeline scores 1 to 5. SOC consoles name their levels instead, and a
 # reader who has seen one expects those words rather than a bare number.
@@ -29,6 +39,9 @@ STYLE = """
   --text: #f3f2f1; --dim: #a19f9d;
   --critical: #a4262c; --high: #d13438; --medium: #ca5010;
   --low: #986f0b; --informational: #605e5c;
+  /* Volume is not severity. The chart gets a colour of its own so that a
+     tall bar does not read as a bad one. */
+  --volume: #4f9cf9;
 }
 * { box-sizing: border-box; }
 body {
@@ -46,19 +59,44 @@ h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
 .tile .n { font-size: 26px; font-weight: 600; }
 .tile .k { color: var(--dim); font-size: 12px; text-transform: uppercase;
            letter-spacing: .4px; }
-.pill {
+.badge {
   display: inline-block; padding: 1px 8px; border-radius: 2px;
   font-size: 12px; font-weight: 600; color: #fff;
 }
+.panel {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 2px; padding: 12px 16px 8px; margin-bottom: 24px;
+}
+.panel .k { color: var(--dim); font-size: 12px; text-transform: uppercase;
+            letter-spacing: .4px; margin-bottom: 8px; }
+.cards { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 24px; }
+.cards > .panel { flex: 1 1 340px; margin-bottom: 0; }
+/* Both carry a bottom margin for when they stand on their own. Inside a
+   card the card's padding already provides it. */
+.panel .tiles { margin-bottom: 12px; }
+.panel .mix { margin-bottom: 0; }
+.bar { display: grid; grid-template-columns: 130px 1fr 36px; gap: 8px;
+       align-items: center; padding: 4px 0; }
+.bar .track { background: var(--line); height: 8px; border-radius: 2px; }
+.bar .fill { background: var(--volume); height: 8px; border-radius: 2px; }
+.bar .n { text-align: right; color: var(--dim); font-size: 12px; }
+.tactic { padding: 8px 0; border-top: 1px solid var(--line); }
+.tactic:first-child { border-top: none; padding-top: 0; }
+.tactic .name { font-weight: 600; margin-bottom: 4px; }
+.chart { width: 100%; height: auto; display: block; }
+.chart text { fill: var(--dim); font-size: 11px; }
+.chart .value { fill: var(--text); }
+.mix { display: flex; height: 6px; border-radius: 3px; overflow: hidden;
+       margin-bottom: 24px; }
 
 /* Eight columns is more than a narrow window holds, so the list scrolls
    sideways rather than wrapping every title one character at a time. */
 .list { overflow-x: auto; }
-.head, summary {
+.headings, summary {
   display: grid; grid-template-columns: GRID_TEMPLATE;
   gap: 12px; align-items: center; min-width: 980px;
 }
-.head {
+.headings {
   padding: 8px 16px; border-bottom: 1px solid var(--line);
   color: var(--dim); font-size: 12px; font-weight: 600;
   text-transform: uppercase; letter-spacing: .4px;
@@ -96,20 +134,32 @@ def severity_name(score):
     return SEVERITY_NAMES.get(score, str(score))
 
 
-def pill(score):
+def severity_badge(score):
     """A severity badge coloured the way a SOC console colours it."""
     name = severity_name(score)
-    return (f'<span class="pill" style="background: var(--{name.lower()})">'
+    return (f'<span class="badge" style="background: var(--{name.lower()})">'
             f"{html.escape(name)}</span>")
 
 
-def chips(values, privileged=()):
-    """Entity chips. Privileged accounts are marked rather than just listed."""
+def chips(values, privileged=(), counts=None):
+    """Entity chips. Privileged accounts are marked, and a count is appended
+    where there is more than one: nine accounts touched once each is a sweep,
+    one of them touched fifteen times is not.
+    """
     out = []
     for value in values:
         css = "chip priv" if value in privileged else "chip"
-        out.append(f'<span class="{css}">{html.escape(str(value))}</span>')
+        body = html.escape(str(value))
+        count = (counts or {}).get(value)
+        if count and count > 1:
+            body += f" &times;{count}"
+        out.append(f'<span class="{css}">{body}</span>')
     return "".join(out) or '<span class="chip">none</span>'
+
+
+def named_counts(names, counts):
+    """Pair each code's display name with how often that code appeared."""
+    return {names[code]: count for code, count in counts.items()}
 
 
 def when(timestamp):
@@ -138,10 +188,133 @@ def tiles(findings):
     return f'<div class="tiles">{"".join(cells)}</div>'
 
 
-def head():
+def severity_mix(findings):
+    """One bar whose segments are proportional to the severity counts.
+
+    The tiles above already give the numbers. This gives the shape, which is
+    the thing you read without counting.
+    """
+    if not findings:
+        return ""
+    segments = []
+    for score in sorted(SEVERITY_NAMES, reverse=True):
+        count = sum(1 for f in findings if f["severity"] == score)
+        if not count:
+            continue
+        name = severity_name(score)
+        share = 100 * count / len(findings)
+        segments.append(
+            f'<div style="width: {share:.1f}%; '
+            f'background: var(--{name.lower()})" '
+            f'title="{html.escape(name)}: {count}"></div>')
+    return f'<div class="mix">{"".join(segments)}</div>'
+
+
+def failures_per_hour(events):
+    """Failed logons bucketed by hour, with the empty hours kept.
+
+    Dropping the quiet hours would pull the bars together and hide the thing
+    the chart exists to show, which is that the failures arrive in bursts.
+    """
+    hours = [e["timestamp"][:13] for e in events
+             if e["event_id"] == FAILED_LOGON]
+    if not hours:
+        return []
+    counts = Counter(hours)
+    first, last = min(counts), max(counts)
+    start, end = int(first[11:13]), int(last[11:13])
+    return [(f"{hour:02d}:00", counts.get(f"{first[:11]}{hour:02d}", 0))
+            for hour in range(start, end + 1)]
+
+
+def timeline(events):
+    """Failed logons over time, as an inline bar chart.
+
+    Hand-drawn rectangles rather than a charting library: the project has no
+    dependencies, and a bar chart is a rectangle per bucket.
+    """
+    buckets = failures_per_hour(events)
+    if not buckets:
+        return ""
+
+    width, height = 900, 150
+    top, bottom = 20, 24
+    plot = height - top - bottom
+    slot = width / len(buckets)
+    tallest = max(count for _, count in buckets)
+
+    parts = []
+    for i, (label, count) in enumerate(buckets):
+        bar = plot * count / tallest if tallest else 0
+        x = i * slot + slot * 0.15
+        parts.append(
+            f'<rect x="{x:.1f}" y="{top + plot - bar:.1f}" '
+            f'width="{slot * 0.7:.1f}" height="{bar:.1f}" '
+            f'fill="var(--volume)"/>')
+        if count:
+            parts.append(
+                f'<text class="value" x="{i * slot + slot / 2:.1f}" '
+                f'y="{top + plot - bar - 5:.1f}" text-anchor="middle">'
+                f"{count}</text>")
+        parts.append(
+            f'<text x="{i * slot + slot / 2:.1f}" y="{height - 8}" '
+            f'text-anchor="middle">{html.escape(label)}</text>')
+
+    return (f'<svg class="chart" viewBox="0 0 {width} {height}" '
+            f'role="img" aria-label="Failed logons per hour">'
+            f'{"".join(parts)}</svg>')
+
+
+def panel(title, body):
+    """A titled card. A SOC console groups its widgets into these."""
+    return (f'<div class="panel"><div class="k">{html.escape(title)}</div>'
+            f"{body}</div>")
+
+
+def tactics(findings):
+    """Findings grouped by MITRE tactic, with the techniques under each.
+
+    The tactic is what the adversary wanted, the technique is how they went
+    about it. Showing both together is what stops "Discovery" from reading as
+    a truncated "Account Discovery".
+    """
+    rows = []
+    for tactic in sorted({f["mitre_tactic"] for f in findings}):
+        matching = [f for f in findings if f["mitre_tactic"] == tactic]
+        marks = chips(f"{i} {n}" for i, n in
+                      sorted({(f["mitre_id"], f["mitre_technique"])
+                              for f in matching}))
+        rows.append(
+            f'<div class="tactic"><div class="name">{html.escape(tactic)}'
+            f" ({len(matching)})</div>{marks}</div>")
+    return "".join(rows) or "none"
+
+
+def top_accounts(events, limit=5):
+    """The most-targeted accounts, counted from the events.
+
+    Counted from the events rather than summed across the findings. Findings
+    overlap on purpose, administrator appears in two of them, and summing
+    their target_users would claim 44 attempts where the logs hold 31.
+    """
+    counts = Counter(event["target_user"] for event in events
+                     if event["event_id"] == FAILED_LOGON)
+    if not counts:
+        return "none"
+    top = counts.most_common(limit)
+    most = top[0][1]
+    return "".join(
+        f'<div class="bar"><div>{html.escape(str(name))}</div>'
+        f'<div class="track"><div class="fill" '
+        f'style="width: {100 * count / most:.0f}%"></div></div>'
+        f'<div class="n">{count}</div></div>'
+        for name, count in top)
+
+
+def column_headings():
     """Column labels, on the same grid as the rows below them."""
     cells = "".join(f"<div>{html.escape(c)}</div>" for c in COLUMNS)
-    return f'<div class="head">{cells}</div>'
+    return f'<div class="headings">{cells}</div>'
 
 
 def row(label, value):
@@ -156,7 +329,7 @@ def entry(finding):
                       for r in finding["severity_reasons"])
     summary = (
         '<span class="caret">&#9656;</span>'
-        f'<div>{pill(finding["severity"])}</div>'
+        f'<div>{severity_badge(finding["severity"])}</div>'
         f'<div>{html.escape(finding["title"])}</div>'
         f'<div><code>{html.escape(finding["source_ip"])}</code></div>'
         f"<div>{html.escape(str(target_of(finding)))}</div>"
@@ -169,44 +342,68 @@ def entry(finding):
         '<div class="detail">'
         + row("Why this severity",
               f"<ul>{reasons}</ul>" if reasons else "no weights fired")
-        + row("MITRE tactic",
-              f'<span class="chip">{html.escape(finding["mitre_tactic"])}</span>')
-        + row("Source", f'<span class="chip">{html.escape(finding["source_ip"])}</span>'
-                        f'<span class="chip">{html.escape(finding["ip_scope"])}</span>')
+        # Repeated from the row above on purpose: that column scrolls out of
+        # sight on a narrow window, and a tactic on its own reads as a
+        # truncated technique.
+        + row("MITRE technique", f'{html.escape(finding["mitre_id"])} '
+                                 f'{html.escape(finding["mitre_technique"])}')
+        + row("MITRE tactic", chips([finding["mitre_tactic"]]))
+        + row("Source", chips([finding["source_ip"], finding["ip_scope"]]))
         + row("Hosts", chips(finding["hosts"]))
         + row("Accounts targeted",
-              chips(finding["target_users"], finding["privileged_targets"]))
-        + row("Logon types", chips(finding["logon_type_names"].values()))
-        + row("Failure reasons", chips(finding["status_code_names"].values()))
-        + row("Window", f"{when(finding['first_seen'])} &rarr; "
+              chips(finding["target_users"], finding["privileged_targets"],
+                    finding["target_users"]))
+        + row("Logon types",
+              chips(finding["logon_type_names"].values(),
+                    counts=named_counts(finding["logon_type_names"],
+                                        finding["logon_types"])))
+        + row("Failure reasons",
+              chips(finding["status_code_names"].values(),
+                    counts=named_counts(finding["status_code_names"],
+                                        finding["status_codes"])))
+        + row("Window", f"{when(finding['first_seen'])} - "
                         f"{when(finding['last_seen'])} "
                         f'({finding["duration_seconds"]}s)')
         + row("Finding id", f'<code>{html.escape(finding["finding_id"])}</code>')
         + "</div></details>")
 
 
-def render(findings):
-    """The whole page as one string."""
+def render(findings, events=()):
+    """The whole page as one string.
+
+    Events are optional because the findings alone make a usable page. The
+    chart needs them: a finding only exists where something was detected, so
+    findings cannot show a quiet hour.
+    """
     if findings:
         first = min(f["first_seen"] for f in findings)
         last = max(f["last_seen"] for f in findings)
         window = f"Data window {when(first)} to {when(last)}"
-        listing = (f'<div class="list">{head()}'
+        listing = (f'<div class="list">{column_headings()}'
                    f'{"".join(entry(f) for f in findings)}</div>')
+        cards = (f'<div class="cards">'
+                 f'{panel("MITRE ATT&CK", tactics(findings))}'
+                 f'{panel("Top targeted accounts", top_accounts(events))}'
+                 f"</div>")
     else:
         window = "No findings"
-        listing = ""
+        listing = cards = ""
+
+    chart = timeline(events)
+    body = (panel("Incidents", tiles(findings) + severity_mix(findings))
+            + (panel("Failed logons per hour", chart) if chart else "")
+            + cards + listing)
 
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
             f"<title>Mini SOC</title><style>{STYLE}</style></head><body>"
             "<h1>Mini SOC</h1>"
             f'<div class="window">{window}</div>'
-            f"{tiles(findings)}{listing}</body></html>")
+            f"{body}</body></html>")
 
 
-def write(findings, path=DASHBOARD_FILE):
+def write(findings, events=(), path=DASHBOARD_FILE):
     """Write the page and return where it went."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render(findings), encoding="utf-8")
+    path.write_text(render(findings, events), encoding="utf-8")
     return path

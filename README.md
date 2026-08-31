@@ -94,16 +94,26 @@ adversarial:
 
 ## The dashboard
 
-![Mini SOC dashboard](docs/dashboard_html.png)
+![Mini SOC dashboard](docs/dashboard.png)
 
 `data/dashboard.html` is a single file with the stylesheet inlined, so it opens
-from disk with no server. It borrows the layout of a SOC console: a count per
-severity across the top, then one list of findings sorted worst first.
+from disk with no server. Four cards sit above the findings: counts per
+severity, failed logons per hour, the MITRE tactics seen with the techniques
+under them, and the most-targeted accounts. Grouping widgets into titled cards
+and pairing severity counts with a chart over time both follow the overview
+page in Microsoft Sentinel.
+
+The chart is where the bursts become visible, with 33 failures in the hour the
+internal attack runs and none in the two hours before it. The account counts
+are taken from the events rather than summed across the findings, because
+findings overlap on purpose: `administrator` appears in two of them, and adding
+up their `target_users` would claim 44 attempts where the logs hold 31.
 
 Severity appears under the names such a console uses rather than as a bare
-number, so a 5 reads as Critical and a 1 as Informational. Each row expands in
+number, so 5 reads as Critical and 1 as Informational. Each row expands in
 place to show why the score is what it is, which accounts were targeted and
-which of those are privileged, the logon types, and the failure reasons.
+which of those are privileged, the logon types, and the failure reasons, each
+with the number of times it occurred.
 
 ## Design notes
 

@@ -10,14 +10,17 @@ import enrich
 
 
 def pipeline():
-    """Load events, detect, enrich. Returns findings.
-    Sorted by severity, then by attempts.
+    """Load events, detect, enrich. Returns the events and the findings.
+
+    The events come back too because the dashboard charts them. Findings are
+    sorted by severity, then by attempts.
     """
     events = collect.load()
     findings = [enrich.enrich(finding) for finding in detect.run(events)]
-    return sorted(findings,
-                  key=lambda finding: (finding["severity"], finding["attempts"]),
-                  reverse=True)
+    return events, sorted(
+        findings,
+        key=lambda finding: (finding["severity"], finding["attempts"]),
+        reverse=True)
 
 
 def target_account(finding):
@@ -26,7 +29,7 @@ def target_account(finding):
 
 
 def main():
-    findings = pipeline()
+    events, findings = pipeline()
     if not findings:
         print("No findings found.")
     for finding in findings:
@@ -43,7 +46,7 @@ def main():
         print(textwrap.indent(agent.assess(finding), "     "))
         print()
 
-    print(f"Dashboard: {dashboard.write(findings)}")
+    print(f"Dashboard: {dashboard.write(findings, events)}")
 
 
 if __name__ == "__main__":
