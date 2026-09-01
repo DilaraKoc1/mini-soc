@@ -17,9 +17,9 @@ and notices the shape they make.
 
 This mini SOC does that counting. It groups the failures that belong together,
 works out which attack technique each group is, scores how serious it looks and
-says why, and then asks a language model for the part a rule cannot do: what this
-most likely is, how sure it is, what the data cannot answer, and which steps to
-take first. The result is the dashboard above.
+says why, and then asks a language model for the part a rule cannot do: what
+this most likely is, how sure it is, what the data cannot answer, and which
+steps to take first. The result is the dashboard above.
 
 Nothing leaves the machine. There is no account to create, no key to configure
 and no package to install: it is Python and its standard library, plus a model
@@ -149,8 +149,11 @@ finding in a delimiter. In the dashboard it is stored XSS, handled by
 `html.escape` on every value. An analyst opening the page to investigate an
 incident should not execute the attacker's code while doing so.
 
-**Deterministic by default.** Fixed seed for the dataset, `temperature: 0` for
-the model. Two runs over the same events produce the same report.
+**Deterministic where it can be.** Fixed seed for the dataset, and
+`temperature: 0` for the model, which makes the token choice greedy. Measured
+rather than assumed: the reply is stable in two versions, split cleanly by
+whether the model had to be loaded for that call, and each of the two
+reproduces exactly.
 
 ## Known limits
 

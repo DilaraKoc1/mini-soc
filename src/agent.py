@@ -8,8 +8,13 @@ import prompts
 URL = "http://localhost:11434/api/chat"
 MODEL = "qwen2.5:32b"
 
-# Zero rather than a parameter. Two runs over the same finding must
-# produce the same reports.
+# Zero rather than a parameter. Two runs over the same finding must produce the
+# same report.
+#
+# Measured over twenty calls: the reply is stable in two versions, split
+# cleanly by whether the model had to be loaded for that call, and each
+# reproduces exactly. An explicit seed makes no difference, not even a
+# different one: greedy decoding has no sampling for a seed to steer.
 TEMPERATURE = 0
 
 # Waiting forever is the default, so this is what turns a hung Ollama
