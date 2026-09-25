@@ -162,14 +162,15 @@ reproduces exactly.
   attempt actually worked is the most useful thing it cannot tell you yet.
 - **A high attempt count means two different things.** `attempts` counts the
   failures in a finding, and `severity()` adds a point at or above 15. For brute
-  force that reads correctly: 17 failures against one account is someone
-  trying hard. For a sweep it does not: 24 failures across nine accounts is
-  under three each, which is the whole point of the technique, because more
-  would lock the accounts out. A rate would separate them: the burst runs at
-  13.4 failures per minute, the sweep at 2.4.
+  force that reads correctly: 17 failures against one account is someone trying
+  hard. For a sweep it does not: the sweep's own 16 attempts are exactly two per
+  account, which is what keeps it under the lockout threshold. A rate would
+  separate them, 13.4 failures per minute for the burst against 3.9 for the
+  sweep. Those are the sweep's numbers and not the finding's, which reports 2.4
+  because the borrowed events stretch its window out to 596 seconds.
 - **The sweep window borrows events.** It is the widest window by account
   count, so it also picks up whatever else that source was doing. In the
-  bundled data, 15 of the sweep's 24 failures are attempts against
+  bundled data, 15 of the finding's 24 failures are attempts against
   `administrator` that the brute-force rule already reports separately, and
   they push it over the volume threshold.
 - **The agent sees one finding at a time.** It cannot notice that the same
